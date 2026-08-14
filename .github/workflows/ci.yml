@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Récupérer le code
+      - name: Recuperer le code
         uses: actions/checkout@v4
 
       - name: Configurer Python
@@ -24,10 +24,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Installer les dépendances
+      - name: Installer les dependances
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Exécuter les tests
+      - name: Executer les tests
+        env:
+          # Cle factice : les tests mockent entierement les appels reels a l'API Mistral
+          # (voir tests/test_router.py). Elle sert uniquement a permettre l'import du
+          # module utils/rag_pipeline_router.py, qui instancie un Agent Mistral au
+          # chargement et leve une erreur si MISTRAL_API_KEY est absente.
+          MISTRAL_API_KEY: "dummy-key-for-ci"
         run: pytest -q
