@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Ajoute la racine du depot au sys.path afin que les imports "utils.*"
+# fonctionnent quel que soit le repertoire d'ou pytest est lance (local ou CI).
+pythonpath = ["."]
+testpaths = ["tests"]
