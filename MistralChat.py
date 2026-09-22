@@ -1,44 +1,40 @@
-"""Interface Streamlit de l assistant NBA Analyst AI.
+"""Interface Streamlit de NBA Analyst AI.
 
-Cette version branche le routeur SQL/RAG (utils/rag_pipeline_router.py) :
-    - les questions chiffrees/comparatives sont traitees par le SQL Tool sur
-      la base SQLite (players, matches, stats, reports) ;
-    - les questions narratives restent traitees par le pipeline RAG FAISS
-      existant sur les rapports PDF.
-Le routage, le traçage Logfire et la gestion d erreurs sont conserves de la
-version precedente ; seule la logique de reponse est deleguee au routeur.
+L'interface délègue la réponse au routeur SQL/RAG :
+- les questions statistiques sont traitées par la base SQLite ;
+- les questions narratives sont traitées par le pipeline RAG sur les PDF ;
+- les réponses insuffisamment étayées déclenchent une abstention explicite.
 """
 
 import logging
+from typing import Optional
 
 import streamlit as st
 from dotenv import load_dotenv
-# Configurer SSL avant tout appel réseau
-from utils.config import configure_ssl, require_mistral_api_key
+
+from utils.config import APP_TITLE, MODEL_NAME, NAME, configure_ssl, require_mistral_api_key
 
 configure_ssl()
-
-# Vérifier la clé API
+load_dotenv()
 require_mistral_api_key()
 
-from utils.config import APP_TITLE, MODEL_NAME, NAME
 from utils.rag_pipeline_router import answer
 from utils.vector_store import VectorStoreManager
 
-load_dotenv()
-
 try:
     import logfire
-    logfire.configure()
-    logfire.info("Logfire configure pour NBA Analyst AI")
 except ImportError:
     logfire = None
-    logging.warning("Logfire non installe : desactivation du tracage")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(module)s - %(message)s",
 )
+LOGGER = logging.getLogger(__name__)
+
+if logfire:
+    logfire.configure()
+    logfire.info("Logfire configuré pour NBA Analyst AI")
 
 ROUTE_LABELS = {
     "SQL": "📊 Statistiques (base SQL)",
@@ -47,33 +43,54 @@ ROUTE_LABELS = {
 
 
 @st.cache_resource
-def get_vector_store_manager() -> VectorStoreManager | None:
-    """Charge l index vectoriel existant une seule fois par session Streamlit."""
+def get_vector_store_manager() -> Optional[VectorStoreManager]:
+    """Charge l'index vectoriel une seule fois par session Streamlit."""
     try:
         manager = VectorStoreManager()
-
         if manager.index is None or not manager.document_chunks:
-            st.error("L'index vectoriel est absent ou vide.")
-            st.warning(
-                "Executez 'python indexer.py' apres avoir ajoute les fichiers dans 'inputs'."
-            )
+            LOGGER.warning("Index vectoriel absent ou vide.")
             return None
 
-        logging.info("Index charge : %s vecteurs.", manager.index.ntotal)
+        LOGGER.info("Index chargé : %s vecteurs.", manager.index.ntotal)
         if logfire:
-            logfire.info("Index FAISS charge", n_vectors=manager.index.ntotal)
+            logfire.info("Index FAISS chargé", n_vectors=manager.index.ntotal)
         return manager
     except (FileNotFoundError, RuntimeError) as error:
-        st.error(str(error))
+        LOGGER.exception("Chargement de l'index impossible : %s", error)
         return None
     except Exception as error:
-        logging.exception("Erreur lors du chargement du Vector Store")
-        st.error(f"Erreur inattendue lors du chargement de l'index : {error}")
+        LOGGER.exception("Erreur inattendue lors du chargement du Vector Store")
+        if logfire:
+            logfire.error("Erreur chargement index", error=str(error))
         return None
+
+
+def afficher_extraits_diagnostic(contexts: list) -> None:
+    """Affiche les extraits récupérés lorsque le RAG s'abstient.
+
+    Ces extraits ne sont pas présentés comme des citations de réponse : ils
+    permettent d'expliquer pourquoi l'information disponible est insuffisante.
+    """
+    if not contexts:
+        return
+
+    with st.expander("Extraits récupérés pour diagnostic"):
+        st.caption(
+            "Ces passages ont été récupérés par la recherche vectorielle, mais "
+            "ils ne suffisent pas à produire une réponse fiable."
+        )
+        for chunk in contexts:
+            filename = getattr(chunk.metadata, "filename", "Source inconnue")
+            st.markdown(
+                f"**{filename} — chunk {chunk.id} "
+                f"(similarité : {chunk.score:.3f})**"
+            )
+            st.write(chunk.text[:600])
+            st.divider()
 
 
 def afficher_reponse(question: str, store: VectorStoreManager) -> tuple[str, str]:
-    """Route la question, affiche le badge de source et retourne (route, texte de reponse)."""
+    """Route la question, affiche le résultat et retourne ``(route, réponse)``."""
     if logfire:
         with logfire.span("agent.answer", question=question[:200]):
             result = answer(question, store=store)
@@ -82,39 +99,49 @@ def afficher_reponse(question: str, store: VectorStoreManager) -> tuple[str, str
 
     route = result["route"]
     response = result["response"]
+    contexts = result.get("contexts", [])
 
     st.caption(ROUTE_LABELS.get(route, route))
 
     if response.abstained:
         st.info(response.answer)
+        if route == "RAG":
+            afficher_extraits_diagnostic(contexts)
     else:
         st.write(response.answer)
         if response.cited_chunk_ids:
-            with st.expander("Sources citees"):
+            with st.expander("Sources citées"):
                 st.write(", ".join(response.cited_chunk_ids))
 
     if logfire:
         logfire.info(
-            "Reponse affichee",
+            "Réponse affichée",
             route=route,
             abstained=response.abstained,
             confidence=response.confidence,
+            retrieved_chunks=len(contexts),
         )
 
     return route, response.answer
 
 
 def main() -> None:
-    """Execute l application Streamlit."""
+    """Exécute l'application Streamlit."""
     st.set_page_config(page_title=APP_TITLE, page_icon="🏀")
     st.title(APP_TITLE)
-    st.caption(f"Assistant virtuel pour {NAME} | Modele : {MODEL_NAME}")
+    st.caption(f"Assistant virtuel pour {NAME} | Modèle : {MODEL_NAME}")
     st.caption(
-        "Questions chiffrees -> base SQL (players/stats). "
-        "Questions d'analyse -> rapports PDF (RAG)."
+        "Questions chiffrées → base SQL (players/stats). "
+        "Questions d'analyse → rapports PDF (RAG)."
     )
 
     vector_store_manager = get_vector_store_manager()
+    if vector_store_manager is None:
+        st.error(
+            "L'index documentaire est indisponible. Exécutez `python indexer.py` "
+            "depuis la racine du projet avant de lancer l'application."
+        )
+        st.stop()
 
     if "messages" not in st.session_state:
         st.session_state.messages = [
@@ -122,7 +149,7 @@ def main() -> None:
                 "role": "assistant",
                 "content": (
                     f"Bonjour ! Je suis votre analyste IA pour la {NAME}. "
-                    "Posez-moi une question chiffree (statistiques) ou une question "
+                    "Posez-moi une question chiffrée (statistiques) ou une question "
                     "d'analyse sur les rapports de match."
                 ),
             }
@@ -133,31 +160,23 @@ def main() -> None:
             st.write(message["content"])
 
     prompt = st.chat_input(f"Posez votre question sur la {NAME}...")
-
     if not prompt:
         return
 
     st.session_state.messages.append({"role": "user", "content": prompt})
-
     with st.chat_message("user"):
         st.write(prompt)
-
-    if vector_store_manager is None:
-        st.warning(
-            "L'index documentaire est indisponible : les questions d'analyse PDF "
-            "ne pourront pas etre traitees. Les questions chiffrees restent possibles."
-        )
 
     with st.chat_message("assistant"):
         with st.spinner("Analyse en cours..."):
             try:
                 _, response_content = afficher_reponse(prompt, vector_store_manager)
             except Exception as error:
-                logging.exception("Erreur lors du traitement de la question")
+                LOGGER.exception("Erreur lors du traitement de la question")
                 if logfire:
                     logfire.error("Erreur pipeline agent", error=str(error))
                 response_content = (
-                    "Une erreur technique empeche la generation de la reponse : "
+                    "Une erreur technique empêche la génération de la réponse : "
                     f"{error}"
                 )
                 st.error(response_content)
