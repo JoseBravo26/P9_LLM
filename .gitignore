@@ -42,7 +42,8 @@ logs/
 *~
 
 # Fichiers de données
-data/
+data/*
+!data/eval_dataset_v2.jsonl
 
 # Jupyter Notebook
 .ipynb_checkpoints
