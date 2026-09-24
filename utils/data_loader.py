@@ -210,67 +210,137 @@ def download_and_extract_zip(url: str, output_dir: str) -> bool:
 
 def load_and_parse_files(input_dir: str) -> List[Dict[str, any]]:
     """
-    Charge et parse récursivement les fichiers d'un répertoire.
-    Retourne une liste de dictionnaires, chacun représentant un document.
+    Charge les documents narratifs destinés au pipeline RAG.
+
+    Le pipeline SQL utilise déjà les fichiers Excel pour les statistiques.
+    Ces fichiers ne doivent donc pas être indexés dans FAISS.
+
+    Formats autorisés :
+    - PDF ;
+    - DOCX ;
+    - TXT.
+
+    Formats exclus :
+    - XLSX ;
+    - XLS ;
+    - CSV ;
+    - fichiers temporaires commençant par '~$'.
+
+    Args:
+        input_dir: Répertoire contenant les fichiers sources.
+
+    Returns:
+        Liste de documents prêts à être découpés et indexés.
     """
     documents = []
     input_path = Path(input_dir)
+
     if not input_path.is_dir():
-        logging.error(f"Le répertoire d'entrée '{input_dir}' n'existe pas.")
+        logging.error(
+            "Le répertoire d'entrée '%s' n'existe pas.",
+            input_dir,
+        )
         return []
 
-    logging.info(f"Parcours du répertoire source: {input_dir}")
-    for file_path in input_path.rglob("*.*"):
-        if file_path.is_file():
-            relative_path = file_path.relative_to(input_path)
-            source_folder = relative_path.parts[0] if len(relative_path.parts) > 1 else "root"
-            ext = file_path.suffix.lower()
-            
-            logging.debug(f"Traitement du fichier: {relative_path} (Dossier source: {source_folder})")
+    extensions_narratives = {".pdf", ".docx", ".txt"}
+    extensions_exclues = {".xlsx", ".xls", ".csv"}
 
-            extracted_content = None
-            if ext == ".pdf":
-                extracted_content = extract_text_from_pdf(str(file_path))
-            elif ext == ".docx":
-                extracted_content = extract_text_from_docx(str(file_path))
-            elif ext == ".txt":
-                extracted_content = extract_text_from_txt(str(file_path))
-            elif ext == ".csv":
-                extracted_content = extract_text_from_csv(str(file_path))
-            elif ext in [".xlsx", ".xls"]:
-                extracted_content = extract_text_from_excel(str(file_path))
-            # Suppression de la gestion des fichiers HTML
-            else:
-                logging.warning(f"Type de fichier non supporté ignoré: {relative_path}")
-                continue
+    logging.info(
+        "Parcours du répertoire narratif source : %s",
+        input_dir,
+    )
 
-            if not extracted_content:
-                logging.warning(f"Aucun contenu n'a pu être extrait de {relative_path}")
-                continue
-            
-            # Si c'est un dictionnaire (plusieurs feuilles Excel), créer un doc par feuille
-            if isinstance(extracted_content, dict):
-                for sheet_name, text in extracted_content.items():
-                    documents.append({
+    for file_path in sorted(input_path.rglob("*.*")):
+        if not file_path.is_file():
+            continue
+
+        if file_path.name.startswith("~$"):
+            logging.info(
+                "Fichier temporaire ignoré : %s",
+                file_path.name,
+            )
+            continue
+
+        extension = file_path.suffix.lower()
+
+        if extension in extensions_exclues:
+            logging.info(
+                "Fichier structuré exclu du RAG : %s",
+                file_path.name,
+            )
+            continue
+
+        if extension not in extensions_narratives:
+            logging.info(
+                "Format non narratif ignoré : %s",
+                file_path.name,
+            )
+            continue
+
+        relative_path = file_path.relative_to(input_path)
+        source_folder = (
+            relative_path.parts[0]
+            if len(relative_path.parts) > 1
+            else "root"
+        )
+
+        logging.info(
+            "Extraction du document narratif : %s",
+            relative_path,
+        )
+
+        extracted_content = None
+
+        if extension == ".pdf":
+            extracted_content = extract_text_from_pdf(str(file_path))
+        elif extension == ".docx":
+            extracted_content = extract_text_from_docx(str(file_path))
+        elif extension == ".txt":
+            extracted_content = extract_text_from_txt(str(file_path))
+
+        if not extracted_content:
+            logging.warning(
+                "Aucun contenu exploitable dans : %s",
+                relative_path,
+            )
+            continue
+
+        if isinstance(extracted_content, dict):
+            for sheet_name, text in extracted_content.items():
+                if not text or not text.strip():
+                    continue
+
+                documents.append(
+                    {
                         "page_content": text,
                         "metadata": {
-                            "source": f"{str(relative_path)} (Feuille: {sheet_name})",
+                            "source": (
+                                f"{relative_path} "
+                                f"(section : {sheet_name})"
+                            ),
                             "filename": file_path.name,
                             "sheet": sheet_name,
                             "category": source_folder,
-                            "full_path": str(file_path.resolve())
-                        }
-                    })
-            else: # Pour tous les autres types de fichiers
-                 documents.append({
+                            "full_path": str(file_path.resolve()),
+                        },
+                    }
+                )
+        else:
+            documents.append(
+                {
                     "page_content": extracted_content,
                     "metadata": {
                         "source": str(relative_path),
                         "filename": file_path.name,
                         "category": source_folder,
-                        "full_path": str(file_path.resolve())
-                    }
-                })
+                        "full_path": str(file_path.resolve()),
+                    },
+                }
+            )
 
-    logging.info(f"{len(documents)} documents chargés et parsés.")
+    logging.info(
+        "%s document(s) narratif(s) chargé(s) pour le RAG.",
+        len(documents),
+    )
+
     return documents

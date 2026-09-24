@@ -39,6 +39,7 @@ if logfire:
 ROUTE_LABELS = {
     "SQL": "📊 Statistiques (base SQL)",
     "RAG": "📄 Analyse documentaire (rapports PDF)",
+    "MIXED": "🔀 Réponse mixte (SQL + RAG)",
 }
 
 

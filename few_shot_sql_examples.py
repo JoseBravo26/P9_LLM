@@ -1,26 +1,14 @@
-"""Exemples question -> SQL fournis au LLM pour cadrer la generation SQLite.
+"""Exemples question -> SQL pour guider la génération SQLite.
 
-Chaque exemple illustre soit une requete correcte sur les statistiques de saison,
-soit le motif d abstention attendu quand la granularite demandee est indisponible
-(cinq derniers matchs, domicile/exterieur).
-
-Correctif du 18/08/2026 :
-    Tous les exemples utilisant un nom de joueur ont ete reecrits pour
-    utiliser `LIKE '%fragment%'` au lieu de l'egalite stricte `=`. En effet,
-    les noms de joueurs stockes en base contiennent des accents (ex: "Nikola
-    Jokić" avec l'accent croate sur le c), alors que les questions des
-    utilisateurs, tout comme les anciens exemples de ce fichier, les
-    ecrivaient sans accent ("Nikola Jokic"). Le LLM reproduisait fidelement
-    l'orthographe sans accent des exemples dans le SQL genere, ce qui
-    provoquait une comparaison stricte ne matchant aucune ligne (0 resultat),
-    alors que la donnee existait bel et bien en base.
-    Un nouvel exemple dedie a ce cas precis (pourcentage a 3 points de Jokic)
-    a egalement ete ajoute pour ancrer le bon reflexe chez le LLM.
+Les exemples couvrent les statistiques saisonnières, les comparaisons de
+joueurs, les formulations bruitées et les demandes qui doivent conduire à
+une abstention. Les noms des joueurs sont écrits sans accent dans les motifs
+LIKE : le SQL Tool applique ensuite sa normalisation SANS_ACCENTS.
 """
 
 FEW_SHOT_SQL = [
     {
-        "question": "Quels sont les dix meilleurs pourcentages a trois points avec au moins 100 tentatives ?",
+        "question": "Quels sont les dix meilleurs pourcentages à trois points avec au moins 100 tentatives ?",
         "sql": (
             "SELECT p.player_name, p.team_code, s.three_point_pct, s.three_point_attempted "
             "FROM stats s JOIN players p ON p.player_id = s.player_id "
@@ -29,27 +17,27 @@ FEW_SHOT_SQL = [
         ),
     },
     {
-        "question": "Quel est le pourcentage a 3 points de Nikola Jokic ?",
+        "question": "Quel est le pourcentage à 3 points de Nikola Jokić ?",
         "sql": (
-            "SELECT p.player_name, s.three_point_pct FROM stats s "
-            "JOIN players p ON p.player_id = s.player_id "
+            "SELECT p.player_name, s.three_point_pct "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
             "WHERE s.granularity = 'season' AND p.player_name LIKE '%Jokic%' "
             "ORDER BY s.season_label DESC LIMIT 1"
         ),
     },
     {
-        "question": "Compare les rebonds de Nikola Jokic, Karl-Anthony Towns et Giannis Antetokounmpo.",
+        "question": "Compare les rebonds de Nikola Jokić, Karl-Anthony Towns et Giannis Antetokounmpo.",
         "sql": (
-            "SELECT p.player_name, s.total_rebounds FROM stats s "
-            "JOIN players p ON p.player_id = s.player_id "
+            "SELECT p.player_name, s.total_rebounds "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
             "WHERE s.granularity = 'season' AND ("
             "p.player_name LIKE '%Jokic%' OR p.player_name LIKE '%Towns%' "
             "OR p.player_name LIKE '%Antetokounmpo%') "
-            "ORDER BY s.total_rebounds DESC"
+            "ORDER BY s.total_rebounds DESC LIMIT 3"
         ),
     },
     {
-        "question": "Quels joueurs depassent 20 points, 5 rebonds et 5 passes par match ?",
+        "question": "Quels joueurs dépassent 20 points, 5 rebonds et 5 passes par match ?",
         "sql": (
             "SELECT p.player_name, "
             "s.total_points * 1.0 / s.games_played AS points_per_game, "
@@ -64,11 +52,66 @@ FEW_SHOT_SQL = [
         ),
     },
     {
-        "question": "Compare les statistiques de rebonds de l equipe a domicile et a l exterieur.",
+        "question": "Compare les statistiques de rebonds de l'équipe à domicile et à l'extérieur.",
         "sql": "ABSTAIN",
     },
     {
-        "question": "Quel joueur a le meilleur pourcentage a trois points sur les cinq derniers matchs ?",
+        "question": "Quel joueur a le meilleur pourcentage à trois points sur les cinq derniers matchs ?",
         "sql": "ABSTAIN",
+    },
+    {
+        "question": "Quel était le pourcentage à 3 points de Stephen Curry lors de son dernier match ?",
+        "sql": "ABSTAIN",
+    },
+    {
+        "question": "Compare les rebonds de Nikola Jokić en playoffs et en saison régulière.",
+        "sql": "ABSTAIN",
+    },
+    {
+        "question": "Combien de rebonds Karl-Anthony Towns a-t-il pris contre les Celtics ?",
+        "sql": "ABSTAIN",
+    },
+    {
+        "question": "Quel est le salaire de Nikola Jokić cette saison ?",
+        "sql": "ABSTAIN",
+    },
+    {
+        "question": "Quelle est la différence de pourcentage à 3 points entre Stephen Curry et Anthony Edwards ?",
+        "sql": (
+            "SELECT p.player_name, s.three_point_pct "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
+            "WHERE s.granularity = 'season' AND ("
+            "p.player_name LIKE '%Stephen Curry%' "
+            "OR p.player_name LIKE '%Anthony Edwards%') "
+            "ORDER BY p.player_name ASC LIMIT 2"
+        ),
+    },
+    {
+        "question": "jokic a mi cb de pts ?",
+        "sql": (
+            "SELECT p.player_name, s.total_points "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
+            "WHERE s.granularity = 'season' AND p.player_name LIKE '%Jokic%' "
+            "LIMIT 1"
+        ),
+    },
+    {
+        "question": "giannis fg% stp",
+        "sql": (
+            "SELECT p.player_name, s.field_goal_pct "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
+            "WHERE s.granularity = 'season' AND p.player_name LIKE '%Giannis%' "
+            "LIMIT 1"
+        ),
+    },
+    {
+        "question": "c lekel le + fort au shoot entre booker et tatum ?",
+        "sql": (
+            "SELECT p.player_name, s.field_goal_pct "
+            "FROM stats s JOIN players p ON p.player_id = s.player_id "
+            "WHERE s.granularity = 'season' AND ("
+            "p.player_name LIKE '%Booker%' OR p.player_name LIKE '%Tatum%') "
+            "ORDER BY s.field_goal_pct DESC LIMIT 2"
+        ),
     },
 ]

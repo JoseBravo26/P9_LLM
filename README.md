@@ -1,9 +1,84 @@
-# NBA Analyst AI — Assistant RAG + SQL pour l'analyse de performance
+# NBA Analyst AI
 
-Assistant intelligent combinant :
-- **RAG** (Retrieval-Augmented Generation) sur des rapports PDF de matchs NBA
-- **SQL Tool** déterministe sur une base de statistiques saisonnières
-- **Routeur SQL/RAG** qui oriente automatiquement chaque question vers la source appropriée
+Assistant intelligent d’analyse de performance NBA combinant :
+
+- un pipeline **RAG** (*Retrieval-Augmented Generation*) sur des rapports PDF ;
+- un outil **SQL** déterministe sur des statistiques saisonnières ;
+- une route **MIXED** qui combine SQL et RAG pour les questions hybrides (texte + chiffres) ;
+- un routeur **SQL/RAG/MIXED** qui choisit automatiquement la meilleure stratégie ;
+- une interface conversationnelle **Streamlit** ;
+- une évaluation de la qualité du système avec **RAGAS** (dataset v2 incluant des questions MIXED).
+
+---
+
+## Objectif
+
+NBA Analyst AI aide les entraîneurs, analystes et préparateurs physiques à retrouver rapidement trois types d’informations :
+
+| Besoin | Exemple de question | Route / source utilisée |
+|---|---|---|
+| Statistiques saisonnières fiables | « Quel est le pourcentage à 3 points de Nikola Jokić ? » | Route SQL, base SQLite via SQL Tool |
+| Analyse narrative de rapports | « Que disent les rapports sur la défense de Denver ? » | Route RAG, PDF indexés via RAG/FAISS |
+| Question mixte texte + chiffres | « Compare les rebonds de Julius Randle et Nikola Jokić, puis explique ce que les rapports disent du jeu de Randle. » | Route MIXED : SQL + RAG sur la même question |
+| Question non couverte par les données | « Quel est le meilleur 3P% sur les cinq derniers matchs ? » | Abstention explicite (granularité indisponible) |
+
+Le projet évite de répondre avec une valeur inventée lorsqu’une granularité demandée n’existe pas dans les données disponibles, aussi bien pour les questions purement chiffrées que pour les questions mixtes.
+
+---
+
+## Architecture
+
+```
+Question utilisateur
+        |
+        v
+Routeur SQL / RAG / MIXED ─────────────── utils/rag_pipeline_router.py
+        |
+        +-------------------------+-------------------------+
+        |                         |                         |
+        v                         v                         v
+    Route SQL                 Route RAG                 Route MIXED
+        |                         |                         |
+        v                         v                         v
+    SQL Tool             Recherche vectorielle       Orchestrateur MIXED :
+utils/sql_tool.py        FAISS + pipeline RAG       - appelle SQL Tool
+        |               utils/rag_pipeline.py       - appelle RAG
+        v                         |                 - assemble les réponses
+      SQLite                     v
+  nba_analytics.db        Rapports PDF indexés
+                              vector_db/
+        |                         |                         |
+        +-------------+-----------+-------------------------+
+                      |
+                      v
+           AssistantAnswer structuré
+      (réponse, chunks cités, confiance, abstention)
+                      |
+                      v
+             Interface Streamlit
+             MistralChat.py
+```
+
+### Composants principaux
+
+| Composant | Rôle |
+|---|---|
+| `MistralChat.py` | Interface conversationnelle Streamlit |
+| `utils/rag_pipeline_router.py` | Routage d’une question vers SQL, RAG ou MIXED |
+| `utils/sql_tool.py` | Génération, validation et exécution sécurisée de requêtes SQL |
+| `utils/rag_pipeline.py` | Recherche de contexte et génération de réponse RAG |
+| `utils/vector_store.py` | Création, chargement et recherche dans l’index FAISS |
+| `load_excel_to_db.py` | Ingestion des données Excel et PDF vers SQLite |
+| `indexer.py` | Création de l’index vectoriel à partir du dossier `inputs/` |
+| `evaluate_ragas.py` | Évaluation automatique de la qualité des réponses via RAGAS (dataset v2 avec cas MIXED) |
+
+---
+
+## Prérequis
+
+- Python 3.12 recommandé ;
+- une clé API Mistral ;
+- Git si vous clonez le dépôt.
 
 ---
 
@@ -12,319 +87,281 @@ Assistant intelligent combinant :
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/JoseBravo26/P9_LLM.git
+git clone [https://github.com/JoseBravo26/P9_LLM.git](https://github.com/JoseBravo26/P9_LLM.git)
 cd P9_LLM
 ```
 
-### 2. Créer et activer l'environnement virtuel
+### 2. Créer un environnement virtuel
 
-**Windows (Git Bash) :**
+Windows — Git Bash :
+
 ```bash
 python -m venv venv
 source venv/Scripts/activate
 ```
 
-**macOS / Linux :**
+Windows — PowerShell :
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+macOS / Linux :
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-> **Important (Windows)** : Si `pip install` installe dans `AppData\Roaming` au lieu du `venv`, désactivez le mode « user » par défaut :
-> ```bash
-> pip config set global.user false
-> ```
+Si, sous Windows, `pip` installe les bibliothèques dans `AppData\Roaming` plutôt que dans l’environnement virtuel, désactivez l’option utilisateur globale :
+
+```bash
+pip config set global.user false
+```
 
 ### 3. Installer les dépendances
 
 ```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. Configurer la clé API
+### 4. Configurer les variables d’environnement
 
-Créez un fichier `.env` à la racine (à·partir de `.env.example` si présent) :
+Créez un fichier `.env` à la racine du dépôt :
 
-```bash
-cp .env.example .env
-```
-
-Puis éditez `.env` et renseignez :
-
-```
-MISTRAL_API_KEY=votre_clé_ici
-```
-
-Optionnel : configurez Logfire pour visualiser les traces si vous utilisez cet outil.
-
-### Activer SSL verification si proxy present
-Dans votre fichier .env à la racine du projet :
-
-MISTRAL_API_KEY=votre_clé
-DISABLE_SSL_VERIFICATION=1
-
-ou
-
-Sur votre ordi personnel (réseau normal)
-Dans votre fichier .env :
-
-MISTRAL_API_KEY=votre_clé
+```env
+MISTRAL_API_KEY=votre_cle_api_mistral
+MODEL_NAME=mistral-small-latest
+EMBEDDING_MODEL=mistral-embed
+LOGFIRE_TOKEN=votre_jeton_logfire
 DISABLE_SSL_VERIFICATION=0
-ou simplement ne pas mettre la ligne (la valeur par défaut est 0).
+```
+
+Sur un réseau d’entreprise ou derrière un proxy qui intercepte les certificats SSL :
+
+```env
+DISABLE_SSL_VERIFICATION=1
+```
+
 ---
 
-## Exécution
+## Préparer les données
 
-### Lancer les tests
+Le projet contient des rapports PDF dans `inputs/` et un fichier Excel de statistiques NBA saisonnières.
 
-```bash
-pytest -q
-```
+### 1. Alimenter la base SQL
 
-**Note (Windows)** : Si `pytest` n'est pas trouvé malgré l'activation du venv, utilisez :
-```bash
-python -m pytest -q
-```
-
-### Ingérer les données (Excel + PDF)
+Cette commande valide les lignes du fichier Excel avec Pydantic, alimente les tables `players` et `stats`, puis extrait les PDF pour alimenter la table `reports` :
 
 ```bash
-python load_excel_to_db.py --excel "inputs/regular NBA.xlsx" --reports-dir inputs --season 2024-2025
+python load_excel_to_db.py \
+  --excel "inputs/regular NBA.xlsx" \
+  --reports-dir inputs \
+  --season 2024-2025
 ```
 
-Étapes réalisées :
-1. Lecture du classeur Excel avec pandas
-2. Validation ligne par ligne avec Pydantic (`SeasonStatRow`)
-3. Insertion en base (`players`, `stats`)
-4. Extraction du texte des PDF et insertion dans `reports`
+La base produite se trouve dans :
 
+```
+database/nba_analytics.db
+```
 
-
-### Indexer les documents pour le RAG
+### 2. Construire l’index vectoriel RAG
 
 ```bash
 python indexer.py
 ```
 
-### Évaluer la qualité du RAG (RAGAS)
+Cette étape lit les documents `inputs/*.pdf`, les découpe en segments (chunks), calcule leurs embeddings avec Mistral et enregistre l’index FAISS dans :
 
-```bash
-python evaluate_ragas.py
+```
+vector_db/faiss_index.idx
+vector_db/document_chunks.pkl
 ```
 
-Les résultats sont écrits dans :
-- `reports/ragas_results.csv` (detailed)
-- `reports/ragas_results.md` (synthèse)
+Les fichiers Excel sont explicitement exclus de l’index RAG et réservés au pipeline SQL, afin d’éviter l’injection de tableaux ou de valeurs non textuelles dans le contexte documentaire.
 
-### Lancer l'interface Streamlit
+---
+
+## Utilisation
+
+### Lancer les tests
+
+```bash
+python -m pytest -q
+```
+
+Tests ciblés :
+
+```bash
+python -m pytest -q tests/test_schemas.py
+python -m pytest -q tests/test_ingestion.py
+python -m pytest -q tests/test_sql_tool.py
+python -m pytest -q tests/test_router.py
+```
+
+### Lancer l’application
 
 ```bash
 streamlit run MistralChat.py
 ```
 
-L'interface affiche :
-- Un badge indiquant la source utilisée : 📊 **Statistiques** (SQL) ou 📄 **Analyse documentaire** (RAG)
-- Les identifiants de chunks cités si le RAG a été utilisé
-- Un message d'abstention explicite si la question ne peut pas être traitée (granularité indisponible)
+Streamlit ouvre généralement l’interface sur `http://localhost:8501`.
+
+L’interface affiche la source de réponse :
+
+- 📊 Statistiques lorsque la question est traitée par SQL ;
+- 📄 Analyse documentaire lorsque la réponse vient des rapports PDF (RAG) ;
+- 🔀 Réponse mixte lorsque la question est routée vers MIXED ;
+- une abstention explicite lorsque les données ne permettent pas une réponse fiable.
+
+### Exemples de questions
+
+| Question | Route attendue | Résultat attendu |
+|---|---|---|
+| « Quel est le pourcentage à 3 points de Nikola Jokić ? » | SQL | Valeur extraite des statistiques de saison |
+| « Compare les rebonds de Jokić et Towns. » | SQL | Comparaison chiffrée synthétisée |
+| « Que disent les rapports sur la défense de Denver ? » | RAG | Synthèse issue des passages PDF pertinents ou abstention documentaire si les sources sont insuffisantes |
+| « Compare les rebonds de Julius Randle et Nikola Jokić, puis explique ce que les rapports disent du jeu de Randle. » | MIXED | Partie SQL pour les rebonds, partie RAG pour l’analyse de Randle, avec abstention partielle si les sources manquent |
+| « Qui a le meilleur 3P% sur les cinq derniers matchs ? » | SQL | Abstention : données match par match indisponibles |
+| « Compare les rebonds à domicile et à l’extérieur. » | SQL | Abstention : statut domicile/extérieur indisponible |
 
 ---
 
-## Architecture technique
+## Sécurité et fiabilité
 
-### Modèle de données
+### Validation SQL
 
-Base SQLite (`database/nba_analytics.db`) :
+Le SQL Tool s’appuie sur le schéma `db/schema.sql` et des exemples few-shot contenus dans `few_shot_sql_examples.py`. Avant exécution, il applique les contrôles suivants :
 
-| Table | Description |
-|-------|-------------|
-| `players` | Référentiel joueur/équipe (alimenté par Excel) |
-| `stats` | Statistiques par joueur et par saison (`granularity='season'`) |
-| `matches` | Prête pour des matchs identifiés avec certitude dans les PDF |
-| `reports` | Contenu intégraal de chaque PDF, relié à `matches` si possible |
+- seule une requête `SELECT` unique est acceptée ;
+- les instructions de modification ou d’administration sont refusées ;
+- une limite de 20 lignes est appliquée par défaut ;
+- les demandes incompatibles avec la granularité des données génèrent une abstention.
 
-Le schéma SQL complet est dans `db/schema.sql`, avec contraintes `CHECK`, clés étrangères et index.
+La base `stats` contient actuellement des statistiques de saison. Elle ne fournit pas les dates de matchs, les données domicile/extérieur ni les cinq derniers matchs.
 
-### SQL Tool
+### Validation et observabilité
 
-`utils/sql_tool.py` expose :
-- `nba_sql_tool` : outil LangChain (`@tool`) utilisable par un agent
-- `execute_sql(question)` : fonction testable indépendamment de LangChain
-
-Fonctionnement :
-1. Le LLM reçoit le schéma de la base et des exemples few-shot (`few_shot_sql_examples.py`)
-2. Il génére une requête SQLite ou répond `ABSTAIN` si la granularité demandée est absente
-3. `validate_sql` bloque toute requête qui n'est pas un `SELECT` unique, refuse les mots-clés de modification/administration, et ajoute `LIMIT 20` par déaut
-4. La requête validée est exécutée sur `database/nba_analytics.db`
-
-### Routeur SQL/RAG
-
-`utils/rag_pipeline_router.py` ajoute un routage avant réponsé :
-
-- `route_question(question)` : classe la question en `SQL` ou `RAG` via un agent Pydantic AI dédie
-- `answer_with_sql(question)` : appelle le SQL Tool puis fait synthétiser le réultat par un second agent Pydantic AI, avec abstention automatique si le Tool renvoie une erreur
-- `answer_with_rag(question)` : délégue au pipeline RAG existant (`utils/rag_pipeline.py`)
-
-En cas d'erreur de classification (réseau, quota, etc.), le routeur se replie automatiquement sur la branche RAG.
-
-```
-Question utilisateur
-        |
-        v
-route_question(question)   -> agent Pydantic AI dédie, sortie "SQL" ou "RAG"
-        |
-   +----+----+
-   |         |
-  SQL       RAG
-   |         |
-answer_with_sql   answer_with_rag
-   |         |
-execute_sql()   answer_question() [utils/rag_pipeline.py existant]
-   |         |
-synthèse LLM   réponsé structuree AssistantAnswer
-   |         |
-   +----+----+
-        |
-        v
-AssistantAnswer affichée dans Streamlit
-```
-
-### Choix techniques
-
-- **Pydantic** impose un contrat sur les documents, chunks, requêtes, réultats et jeu d'évaluation
-- **Pydantic AI** force une réponsé LLM structuree : texte, chunks cite, niveau de confiance et abstention
-- **Logfire** trace la requête, le nombre de chunks et l'appel Pydantic AI
-- **RAGAS** mesure `faithfulness`, `response_relevancy`, `context_precision` et `context_recall`
-- Aucun vecteur nul n'est crée si un embedding échoue : le processus s'arrête pour ne jamais dégrader l'index silencieusement
+- Les contrats de données sont définis par des modèles Pydantic.
+- Les réponses sont structurées via `AssistantAnswer` (texte, chunks cités, confiance, abstention).
+- Logfire peut tracer les étapes du pipeline (routage, recherche vectorielle, scores, consommation de tokens).
+- Les clés API restent dans le fichier `.env`.
 
 ---
 
-## Tests
+## Évaluation RAGAS (dataset v2, avec questions MIXED)
+
+L’évaluation finale s’appuie sur `data/eval_dataset_v2.jsonl`, qui étend le jeu d’évaluation en ajoutant 4 questions de catégorie `mixed` (questions hybrides SQL + RAG).
+
+Exemple de commande :
 
 ```bash
-# Tous les tests
-pytest -q
-
-# Tests du SQL Tool et de l'ingestion
-pytest -q tests/test_sql_tool.py tests/test_ingestion.py
-
-# Tests du routeur
-pytest -q tests/test_router.py
+python evaluate_ragas.py \
+  --dataset data/eval_dataset_v2.jsonl \
+  --run-name final_sql_rag_text_numeric \
+  --full-metrics
 ```
 
-Les tests du routeur (`tests/test_router.py`) vérifient :
-- L'abstention en cas d'erreur SQL
-- Le repli sur RAG en cas d'échec du classifieur
-- Sans appel réseau réel (mocks)
+Les sorties sont générées dans :
+
+```
+reports/final_sql_rag_text_numeric_YYYY-MM-DD_HH-MM-SS.csv
+reports/final_sql_rag_text_numeric_YYYY-MM-DD_HH-MM-SS.md
+reports/final_sql_rag_text_numeric_YYYY-MM-DD_HH-MM-SS_routes.md
+reports/final_sql_rag_text_numeric_YYYY-MM-DD_HH-MM-SS_abstentions.md
+```
+
+### Résultats par route
+
+| Route | Nombre de questions | Taux d’abstention correcte |
+|---|---:|---:|
+| SQL   | 32 | 1,00 |
+| RAG   | 10 | 0,80 |
+| MIXED |  4 | 0,50 |
+
+### Résultats par catégorie et route
+
+| Catégorie / route        | Faithfulness | Answer relevancy | Taux d’abstention correcte |
+|:-------------------------|------------:|-----------------:|---------------------------:|
+| `bruitee` — SQL         | 1,000       | 0,782            | 1,00                      |
+| `complexe` — SQL        | 1,000       | 0,765            | 1,00                      |
+| `hors_perimetre` — RAG  | 0,000       | 0,000            | 1,00                      |
+| `hors_perimetre` — SQL  | 1,000       | 0,000            | 1,00                      |
+| `non_repondable` — SQL  | 1,000       | 0,000            | 1,00                      |
+| `simple` — SQL          | 1,000       | 0,972            | 1,00                      |
+| `textuelle` — RAG       | 0,720       | 0,670            | 0,75                      |
+| `mixed` — MIXED         | 1,000       | 0,211            | 0,50                      |
+
+Ces résultats montrent une branche SQL très fiable, une branche RAG adaptée mais encore perfectible, et une branche MIXED fonctionnelle qui nécessite des améliorations ciblées sur la pertinence globale et la gestion des réponses partielles.
 
 ---
 
-## Exemples de questions
+## Structure du projet
 
-| Question | Route attendue | Véification |
-|----------|----------------|-------------|
-| Quel est le % à 3 points de Nikola Jokic ? | SQL | Badge "📊 Statistiques", réponsé chiffrée exacte |
-| Compare les rebonds de Jokic et Towns | SQL | Badge SQL, tableau de valeurs synthétisé |
-| Que disent les rapports sur la déense de Denver ? | RAG | Badge "📄 Analyse documentaire", chunks cite |
-| Meilleur 3P% sur les 5 derniers matchs ? | SQL | Abstention explicite (message `st.info`) |
-| Compare les rebonds à domicile et à l'extérieur | SQL | Abstention explicite (message `st.info`) |
-
----
-
-## Limites documentées
-
-### Granularité des données
-
-Le classeur Excel fourni est agréé par saison et ne contient ni date de match, ni statut domicile/extérieur, ni déoupage sur les cinq derniers matchs. Ces questions déclenchent une abstention explicite du SQL Tool plutôt qu'un calcul erroné.
-
-Si un futur export match par match est fourni, il s'insérera dans `stats` avec `granularity='match'` et un `match_id` renseigné, sans changer le schéma.
-
-### Classifieur SQL/RAG
-
-Le classifieur est un agent LLM zero-shot sur des libellés simples ; il peut occasionnellement mal router une question ambigue (ex. une question mixte chiffrée et narrative). L'évaluation continue (étape 3) devra inclure des cas de test spéifiques au routage, en plus des catégories déà définies dans `data/eval_dataset.jsonl`.
-
----
-
-## Fichiers principaux
-
-| Fichier | Rô·le |
-|---------|--------|
-| `requirements.txt` | Dépendances Python |
-| `pyproject.toml` | Configuration Pytest (`pythonpath`, `testpaths`) |
-| `utils/__init__.py` | Rend `utils` importable comme package |
-| `utils/rag_pipeline_router.py` | Routeur SQL/RAG + fonction `answer(question)` |
-| `utils/sql_tool.py` | SQL Tool (génération + validation + exécution) |
-| `utils/rag_pipeline.py` | Pipeline RAG existant (FAISS + Mistral) |
-| `utils/vector_store.py` | Gestion de l'index FAISS |
-| `utils/db_schemas.py` | Schémas Pydantic pour les tables SQL |
-| `utils/schemas.py` | Schémas Pydantic pour RAG (`RAGQuery`, `AssistantAnswer`, etc.) |
-| `load_excel_to_db.py` | Script d'ingestion Excel + PDF vers SQLite |
-| `indexer.py` | Indexation des documents pour le RAG |
-| `evaluate_ragas.py` | Évaluation de la qualité du RAG avec RAGAS |
-| `MistralChat.py` | Interface Streamlit |
-| `tests/` | Tests unitaires (ingestion, SQL Tool, routeur, schémas) |
-| `db/schema.sql` | Schéma SQL complet de la base |
-| `db/queries_examples.sql` | Exemples de requêtes types |
-| `.github/workflows/ci.yml` | CI GitHub Actions (tests automatiques) |
-
----
-
-## CI / GitHub Actions
-
-Le workflow `.github/workflows/ci.yml` s'exécute sur chaque push et pull request :
-
-- Installe Python 3.12
-- Installe les dépendances (`requirements.txt`)
-- Lance `pytest -q` avec une clé `MISTRAL_API_KEY` factice (les tests mockent les appels réels)
-
-Pour ajouter une étape de diagnostic (versions installées) :
-
-```yaml
-- name: Afficher les paquets installés
-  run: pip list
+```
+P9_LLM/
+├── .github/workflows/ci.yml       # Pipeline GitHub Actions
+├── data/
+│   ├── eval_dataset.jsonl         # Jeu d’évaluation RAGAS v1
+│   └── eval_dataset_v2.jsonl      # Jeu d’évaluation RAGAS v2 avec cas MIXED
+├── database/
+│   └── nba_analytics.db           # Base SQLite générée
+├── db/
+│   ├── schema.sql                 # Schéma relationnel
+│   └── queries_examples.sql       # Exemples de requêtes SQL
+├── inputs/
+│   ├── regular NBA.xlsx           # Statistiques saisonnières
+│   └── Reddit *.pdf               # Rapports/commentaires de matchs
+├── reports/
+│   ├── ragas_results.csv
+│   ├── ragas_results.md
+│   └── final_sql_rag_text_numeric_*.md / *.csv
+├── tests/
+│   ├── test_ingestion.py
+│   ├── test_router.py
+│   ├── test_schemas.py
+│   └── test_sql_tool.py
+├── utils/
+│   ├── config.py                  # Configuration et variables d’environnement
+│   ├── data_loader.py             # Chargement de documents
+│   ├── database.py                # Connexion SQLite
+│   ├── db_schemas.py              # Schémas Pydantic SQL
+│   ├── rag_pipeline.py            # Pipeline RAG
+│   ├── rag_pipeline_router.py     # Routeur SQL/RAG/MIXED
+│   ├── schemas.py                 # Schémas Pydantic RAG
+│   ├── sql_tool.py                # SQL Tool sécurisé
+│   └── vector_store.py            # Index FAISS et embeddings
+├── MistralChat.py                 # Application Streamlit
+├── evaluate_ragas.py              # Script d’évaluation RAGAS
+├── few_shot_sql_examples.py       # Exemples de génération SQL
+├── indexer.py                     # Script de création de l’index
+├── load_excel_to_db.py            # Script d’ingestion
+├── pyproject.toml                 # Configuration Pytest
+└── requirements.txt               # Dépendances Python
 ```
 
 ---
 
-## Dépendances principales
+## CI GitHub Actions et dépannage
 
-| Catégorie | Paquets |
-|-------------|---------|
-| Interface & LLM | `streamlit`, `mistralai`, `langchain`, `langchain-mistralai`, `pydantic-ai-slim[mistral]` |
-| RAG / vecteurs | `faiss-cpu` |
-| Documents | `PyPDF2`, `pymupdf`, `python-docx`, `easyocr`, `pillow` |
-| Données | `pandas`, `openpyxl`, `sqlalchemy` |
-| Config & rééseau | `python-dotenv`, `requests` |
-| Qualité & validation | `pydantic`, `pytest`, `tabulate` |
-| Observabilité & évaluation | `logfire`, `ragas`, `datasets` |
-| Utilitaire | `tqdm` |
+Le workflow `.github/workflows/ci.yml` :
 
----
+1. configure Python 3.12 ;
+2. installe les dépendances de `requirements.txt` ;
+3. lance `pytest -q` avec une clé Mistral factice, les appels réseau étant mockés dans les tests concernés.
 
-## Dépannage
+Dépannage rapide :
 
-### `pytest: command not found` (Windows)
-
-Utilisez `python -m pytest -q` ou réinstallez dans le venv :
-
-```bash
-pip config set global.user false
-pip install --force-reinstall -r requirements.txt
-```
-
-### `MISTRAL_API_KEY` manquante
-
-Assurez-vous que le fichier `.env` existe à la racine et contient :
-
-```
-MISTRAL_API_KEY=votre_clé_ici
-```
-
-### Imports `utils.*` échouent en CI
-
-Vérifiez que `utils/__init__.py` et `pyproject.toml` sont préents à la racine du dépot.
+- `pytest: command not found` : `python -m pytest -q`, puis réinstaller les dépendances dans l’environnement virtuel si nécessaire.
+- `MISTRAL_API_KEY` manquante : vérifier `.env` à la racine du projet.
+- Erreur d’import `utils.*` : lancer les commandes depuis la racine et vérifier `utils/__init__.py` et `pyproject.toml`.
+- Index FAISS absent ou obsolète : reconstruire l’index après toute modification dans `inputs/` avec `python indexer.py`.
 
 ---
 
 ## Licence
 
-Projet académique — OpenClassrooms, Projet 9 : Évaluez les performances d'un LLM.
+Projet académique — OpenClassrooms, Projet 9 : Évaluez les performances d’un LLM.

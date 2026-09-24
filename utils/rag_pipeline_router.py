@@ -47,17 +47,59 @@ try:
 except ImportError:
     logfire = None
 
-ROUTER_PROMPT = """Tu classes une question sur une equipe NBA en une seule etiquette parmi :
-- SQL : question chiffree, comparative ou d agregation sur des statistiques de joueurs/equipes
-  (exemples : pourcentage a 3 points, nombre de rebonds, comparaison entre joueurs, classement).
-- RAG : question narrative, qualitative ou d analyse issue de commentaires/rapports de match
-  (exemples : analyse tactique, avis, contexte d un match, debat entre fans).
-Reponds uniquement par SQL ou RAG, sans aucun autre mot."""
+ROUTER_PROMPT = """Tu classes une question sur une équipe NBA en une seule étiquette parmi :
+- SQL : question chiffrée, comparative ou d’agrégation sur des statistiques de joueurs/équipes
+  (exemples : pourcentage à 3 points, nombre de rebonds, comparaison entre joueurs, classement).
+- RAG : question narrative, qualitative ou d’analyse issue de commentaires/rapports de match
+  (exemples : analyse tactique, avis, contexte d’un match, débat entre fans).
+- MIXED : question qui combine à la fois une demande chiffrée (statistiques, comparaison,
+  classement…) ET une demande narrative (analyse, contexte, avis) dans la même phrase.
 
-SQL_SYNTHESIS_PROMPT = """Tu es analyste NBA. Redige une reponse concise et sourcee a partir
-du RESULTAT SQL fourni. Cite les colonnes et valeurs utilisees. Si le resultat est vide ou
-contient une erreur, explique clairement que la donnee demandee n est pas disponible dans les
-statistiques de saison. Ne calcule et n invente jamais une statistique absente du resultat fourni."""
+Règles :
+- Réponds uniquement par SQL, RAG ou MIXED, sans aucun autre mot.
+- Les formulations informelles et fautives restent des questions SQL dès qu’elles demandent
+  une statistique, une comparaison ou un classement.
+- Si la question contient clairement une partie “analyse” ET une partie “statistique”
+  (par exemple « analyse la défense de Denver ET donne le pourcentage à 3 points de Jokic »),
+  choisis systématiquement MIXED.
+
+Exemples SQL :
+- c lekel le + fort au shoot entre booker et tatum ?
+- ki a le + de rebonds entre jokic giannis et KAT ?
+
+Exemples RAG :
+- Que disent les rapports sur la défense de Denver ?
+- Comment les fans analysent la saison de Julius Randle ?
+
+Exemples MIXED :
+- Analyse la défense de Denver et donne le pourcentage à 3 points de Nikola Jokic.
+- Explique la saison de Minnesota et compare les rebonds de Jokic et Towns.
+"""
+
+SQL_SYNTHESIS_PROMPT = """Tu es analyste NBA. Rédige une réponse concise et sourcée à partir du RESULTAT SQL fourni.
+
+RÈGLES :
+- Utilise exclusivement les lignes et colonnes présentes dans le RESULTAT SQL.
+- Cite les colonnes et les valeurs utilisées.
+- Si le résultat est vide ou contient une erreur, explique clairement que la donnée demandée n'est pas disponible dans les statistiques de saison.
+- Ne calcule et n'invente jamais une statistique absente du résultat fourni.
+- Pour toute comparaison de plusieurs joueurs, associe strictement chaque valeur au `player_name` figurant sur la même ligne du RESULTAT SQL.
+- Ne déduis jamais l'association entre un joueur et une valeur à partir de l'ordre de la question.
+- Avant de répondre, vérifie que le joueur présenté comme premier possède bien la valeur la plus élevée dans les lignes SQL, lorsque la question demande le meilleur, le plus élevé ou un classement.
+- Les termes `stp`, `svp` et `merci` sont des marques de politesse ; ne les interprète jamais comme des statistiques.
+- Chaque ligne est au format `colonne=valeur`.
+- Pour une comparaison, recopie l'association `player_name=...` et
+  `field_goal_pct=...` de chaque ligne exactement telle qu'elle est fournie.
+- Si les lignes sont triées par une colonne décroissante, le premier joueur
+  de la liste possède la valeur la plus élevée.
+- N'inverse jamais des valeurs entre deux joueurs, même si leur ordre dans
+  la QUESTION est différent.
+  - Traduis les noms techniques de colonnes en français naturel.
+- field_goal_pct doit être formulé « pourcentage de tirs réussis ».
+- Affiche les pourcentages avec le symbole % et une virgule décimale.
+- Ne mentionne pas les noms internes de colonnes SQL, sauf si l'utilisateur
+  les demande explicitement.
+"""
 
 router_agent = Agent(f"mistral:{MODEL_NAME}", output_type=str, system_prompt=ROUTER_PROMPT)
 sql_synthesis_agent = Agent(
@@ -74,7 +116,7 @@ def _traced_span(name: str, **attributes):
 
 
 def route_question(question: str) -> str:
-    """Classe la question en 'SQL' ou 'RAG'. Repli sur RAG si la classification echoue."""
+    """Classe la question en 'SQL', 'RAG' ou 'MIXED'. Repli sur RAG si la classification échoue."""
     with _traced_span("router.classify", question=question[:200]):
         try:
             decision = router_agent.run_sync(question).output.strip().upper()
@@ -83,16 +125,24 @@ def route_question(question: str) -> str:
             if logfire:
                 logfire.error("Erreur routeur", error=str(exc))
             return "RAG"
-    route = "SQL" if "SQL" in decision else "RAG"
+
+    if "MIXED" in decision:
+        route = "MIXED"
+    elif "SQL" in decision:
+        route = "SQL"
+    else:
+        route = "RAG"
+
     if logfire:
         logfire.info("Question routee", route=route, question=question[:200])
     return route
 
 
 def answer_with_sql(question: str) -> AssistantAnswer:
-    """Execute le SQL Tool puis fait synthetiser le resultat par le LLM."""
+    """Exécute le SQL Tool puis synthétise le résultat de façon contrôlée."""
     with _traced_span("router.sql_branch", question=question[:200]):
         result = execute_sql(question)
+
         if logfire:
             logfire.info(
                 "Resultat SQL Tool",
@@ -100,19 +150,42 @@ def answer_with_sql(question: str) -> AssistantAnswer:
                 has_error=bool(result.error),
                 sql=result.sql[:300],
             )
+
         if result.error:
             return AssistantAnswer(
                 answer=(
-                    "Je ne peux pas repondre avec les donnees structurees disponibles : "
-                    f"{result.error}"
+                    "Je ne peux pas répondre avec les données structurées "
+                    f"disponibles : {result.error}"
                 ),
                 cited_chunk_ids=[],
-                confidence="low",
+                confidence="high",
                 abstained=True,
             )
-        prompt = f"QUESTION: {question}\nRESULTAT SQL ({result.row_count} lignes): {result.rows}"
-        synthesis = sql_synthesis_agent.run_sync(prompt)
-        return synthesis.output
+
+        if result.row_count == 0:
+            return AssistantAnswer(
+                answer=(
+                    "Je ne peux pas répondre avec les données structurées "
+                    "disponibles : aucune donnée correspondante n’a été trouvée."
+                ),
+                cited_chunk_ids=[],
+                confidence="high",
+                abstained=True,
+            )
+        rows_text = "\n".join(
+            " | ".join(f"{column}={value}" for column, value in row.items())
+            for row in result.rows
+        )
+
+        prompt = (
+            f"QUESTION: {question}\n\n"
+            f"RESULTAT SQL — {result.row_count} ligne(s) :\n"
+            f"{rows_text}\n\n"
+            "RÈGLE ABSOLUE : associe une valeur uniquement au player_name de la "
+            "même ligne. Ne change jamais l'association player_name/valeur."
+        )
+
+        return sql_synthesis_agent.run_sync(prompt).output
 
 
 def answer_with_rag(
@@ -130,27 +203,87 @@ def answer_with_rag(
         result: PipelineResult = answer_question(question, top_k=top_k, store=store)
         return result.response, result.contexts
 
+def answer_mixed(
+    question: str,
+    top_k: int = 5,
+    store: Optional[VectorStoreManager] = None,
+) -> dict:
+    """
+    Traite une question MIXED en combinant la branche SQL et la branche RAG.
 
-def answer(question: str, top_k: int = 5, store: Optional[VectorStoreManager] = None) -> dict:
-    """Point d entree unique pour l interface : route puis repond, avec metadonnees de tracage.
+    - Partie SQL : utilise answer_with_sql(question) pour produire la réponse chiffrée.
+    - Partie RAG : utilise answer_with_rag(question) pour produire la réponse narrative.
+    - Construit une AssistantAnswer unique qui contient les deux parties clairement séparées.
+    - Retourne également les réponses détaillées sql_answer et rag_answer pour l’analyse.
+    """
+    with _traced_span("router.mixed_branch", question=question[:200]):
+        # 1) Réponse chiffrée
+        sql_answer = answer_with_sql(question)
 
-    Retourne un dictionnaire pret a afficher :
-        {
-            "route": "SQL"|"RAG",
-            "response": AssistantAnswer,
-            "contexts": list[RetrievedChunk],  # vide pour la branche SQL
+        # 2) Réponse narrative + contextes
+        rag_answer, rag_contexts = answer_with_rag(question, top_k=top_k, store=store)
+
+        # 3) Construction d’une réponse combinée lisible
+        if sql_answer.abstained and rag_answer.abstained:
+            combined_text = (
+                "Je ne peux pas répondre de façon fiable ni sur la partie "
+                "statistique, ni sur la partie analyse documentaire avec les "
+                "sources disponibles."
+            )
+            combined_abstained = True
+            combined_confidence = "high"
+        else:
+            # On explique clairement les deux parties
+            combined_text = (
+                "Partie statistiques (SQL) :\n"
+                f"{sql_answer.answer}\n\n"
+                "Partie analyse documentaire (RAG) :\n"
+                f"{rag_answer.answer}"
+            )
+            # Si une des deux parties est fragile, on reste prudent
+            combined_abstained = False
+            combined_confidence = "medium"
+
+        combined_answer = AssistantAnswer(
+            answer=combined_text,
+            cited_chunk_ids=rag_answer.cited_chunk_ids,
+            confidence=combined_confidence,
+            abstained=combined_abstained,
+        )
+
+        return {
+            "route": "MIXED",
+            "response": combined_answer,
+            "contexts": rag_contexts,
+            "sql_answer": sql_answer,
+            "rag_answer": rag_answer,
         }
 
-    La cle "contexts" est ajoutee pour permettre une evaluation RAGAS fidele
-    au comportement reel du systeme (voir evaluate_ragas.py). Elle est
-    retro-compatible : le code appelant qui ne lit que "route" et "response"
-    (comme MistralChat.py) continue de fonctionner sans modification.
+def answer(
+    question: str,
+    top_k: int = 5,
+    store: Optional[VectorStoreManager] = None,
+) -> dict:
     """
-    RAGQuery(question=question)  # Validation Pydantic de la question avant tout traitement.
+    Point d’entrée unique pour l’interface : route puis répond, avec métadonnées de tracage.
+
+    Retourne un dictionnaire prêt à afficher :
+
+    - "route": "SQL" | "RAG" | "MIXED",
+    - "response": AssistantAnswer,
+    - "contexts": list[RetrievedChunk]  # vide pour la branche SQL,
+    - éventuellement "sql_answer" et "rag_answer" pour MIXED.
+    """
     route = route_question(question)
+
     if route == "SQL":
-        response = answer_with_sql(question)
-        contexts: list[RetrievedChunk] = []
-    else:
+        with _traced_span("router.sql_branch", question=question[:200]):
+            response = answer_with_sql(question)
+        return {"route": "SQL", "response": response, "contexts": []}
+
+    if route == "RAG":
         response, contexts = answer_with_rag(question, top_k=top_k, store=store)
-    return {"route": route, "response": response, "contexts": contexts}
+        return {"route": "RAG", "response": response, "contexts": contexts}
+
+    # Route MIXED : combinaison des deux
+    return answer_mixed(question, top_k=top_k, store=store)

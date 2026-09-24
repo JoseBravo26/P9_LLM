@@ -211,6 +211,18 @@ def build_prompt(question: str) -> str:
         "d'eux apparaisse dans le resultat.\n\n"
         f"SCHEMA DE LA BASE:\n{SCHEMA_TEXT}\n\n"
         f"EXEMPLES:\n{examples_text}\n\n"
+        "VOCABULAIRE À RESPECTER :\n"
+        "- FG% signifie field_goal_pct (pourcentage global de tirs réussis).\n"
+        "- FT% signifie free_throw_pct (pourcentage de lancers francs).\n"
+        "- 3P%, 3p ou 3 points signifie three_point_pct.\n"
+        "- PTS, points marqués cette saison, ou 'cb de pts' signifie total_points.\n"
+        "- points par match, PPG ou moyenne de points signifie points_per_game.\n"
+        "- 'au shoot' signifie field_goal_pct, sauf si la question demande explicitement "
+        "true shooting, TS% ou true_shooting_pct.\n"
+        "- Stephen Curry doit être filtré par le nom complet 'Stephen Curry', jamais "
+        "uniquement par le fragment 'Curry', afin de ne pas sélectionner Seth Curry.\n"
+        "- stp, svp et merci sont des marques de politesse : ne les interprète jamais "
+        "comme des statistiques ou des colonnes.\n"
         f"QUESTION: {question}\nSQL:"
     )
 

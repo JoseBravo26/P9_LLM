@@ -21,5 +21,19 @@ class RAGQuery(BaseModel):
 class AssistantAnswer(BaseModel):
  answer:str=Field(min_length=1); cited_chunk_ids:list[str]=Field(default_factory=list); confidence:Literal['high','medium','low']; abstained:bool=False
 class EvaluationCase(BaseModel):
- model_config=ConfigDict(extra='forbid'); id:str; category:Literal['simple','complexe','bruitee','hors_perimetre','non_repondable']; question:str; reference_answer:str; reference_contexts:list[str]=Field(default_factory=list); expected_abstention:bool=False
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    category: Literal[
+        "simple",
+        "complexe",
+        "textuelle",
+        "bruitee",
+        "hors_perimetre",
+        "non_repondable",
+        "mixed",  # nouvelle catégorie pour les questions MIXED
+    ]
+    question: str
+    reference_answer: str
+    reference_contexts: list[str] = Field(default_factory=list)
+    expected_abstention: bool = False
 class PipelineResult(BaseModel): query:RAGQuery; contexts:list[RetrievedChunk]; response:AssistantAnswer

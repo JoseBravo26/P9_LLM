@@ -24,6 +24,7 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 SEARCH_K = int(os.getenv("SEARCH_K", "5"))
+MIN_RAG_SCORE = float(os.getenv("MIN_RAG_SCORE", "0.68"))
 
 # Parametres d'interface utilises par MistralChat.py.
 APP_TITLE = os.getenv("APP_TITLE", "NBA Analyst AI")

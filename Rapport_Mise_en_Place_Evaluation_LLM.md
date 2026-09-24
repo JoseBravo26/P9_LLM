@@ -2,38 +2,42 @@
 
 ## NBA Analyst AI — Projet 9 OpenClassrooms
 
-**Mission : Évaluez les performances d’un LLM**  
-**Organisation : SportSee**  
-**Domaine : analyse de performance basketball NBA**
+Mission : Évaluez les performances d’un LLM  
+Organisation : SportSee  
+Domaine : analyse de performance basketball NBA
 
 ---
 
 ## Résumé exécutif
 
-SportSee souhaite valoriser des archives documentaires et des statistiques NBA afin d’aider les entraîneurs, analystes et préparateurs physiques à accéder plus rapidement à l’information pertinente. Le prototype initial reposait sur un système RAG (*Retrieval-Augmented Generation*) documentaire. L’évaluation a montré qu’un RAG seul est inadapté aux questions chiffrées : les valeurs saisonnières, les comparaisons de joueurs et les classements doivent être calculés à partir d’une source structurée et déterministe.
+SportSee souhaite valoriser des archives documentaires et des statistiques NBA afin d’aider les entraîneurs, analystes et préparateurs physiques à accéder plus rapidement à l’information pertinente. Le prototype initial reposait sur un système RAG documentaire. L’évaluation a montré qu’un RAG seul est inadapté aux questions chiffrées : les valeurs saisonnières, les comparaisons de joueurs et les classements doivent être calculés à partir d’une source structurée et déterministe.
 
-Le système final est donc un assistant hybride **SQL/RAG** :
+Le système final est donc un assistant hybride SQL/RAG/MIXED :
 
 - les questions narratives sont traitées par un RAG sur les rapports PDF ;
 - les questions statistiques sont traitées par un SQL Tool sur une base SQLite ;
-- un routeur LLM choisit la voie adaptée ;
+- les questions mixtes (texte + chiffres) sont traitées par une route MIXED qui orchestre SQL et RAG sur la même requête ;
+- un routeur LLM choisit automatiquement la voie adaptée (SQL, RAG ou MIXED) ;
 - une abstention explicite est produite lorsque les sources ne permettent pas une réponse fiable ;
 - Logfire assure la traçabilité des routes, recherches vectorielles, chunks récupérés et appels LLM.
 
-La validation finale a confirmé le bon fonctionnement de la suite de tests avec **15 tests réussis**. Des démonstrations fonctionnelles ont validé un cas SQL positif, un cas RAG positif, une abstention SQL liée à la granularité et une abstention RAG liée à l’insuffisance documentaire.
+La validation finale confirme le bon fonctionnement de la suite de tests Pytest et une évaluation RAGAS v2 sur 46 questions, incluant 4 cas de catégorie `mixed`. La branche SQL est parfaitement fiable, la branche RAG reste adaptée aux questions textuelles et la branche MIXED est fonctionnelle mais encore perfectible.
 
 ---
 
 ## 1. Contexte et objectif métier
 
-SportSee développe un assistant d’analyse de performance destiné aux clubs de basketball. Les utilisateurs cibles — entraîneurs, analystes vidéo et préparateurs physiques — doivent pouvoir interroger rapidement des rapports de match et des données statistiques afin de préparer une séance, un match ou un suivi d’athlète.
+SportSee développe un assistant d’analyse de performance destiné aux clubs de basketball. Les utilisateurs cibles sont des entraîneurs, analystes vidéo et préparateurs physiques. Ils doivent pouvoir interroger rapidement :
 
-Le besoin initial consistait à exploiter des documents non structurés par RAG. Cependant, les sources disponibles sont hétérogènes :
+- des rapports de match pour obtenir une analyse narrative ;
+- des données statistiques pour obtenir des valeurs chiffrées fiables.
+
+Les sources disponibles sont hétérogènes :
 
 - des rapports ou discussions de match au format PDF, utiles pour les analyses narratives ;
 - un classeur Excel contenant des statistiques saisonnières, utile pour les réponses chiffrées.
 
-L’objectif du projet est d’évaluer le comportement du LLM, d’identifier les limites d’un RAG documentaire seul, puis de construire un système plus fiable, explicable et reproductible.
+L’objectif du projet est d’évaluer le comportement du LLM, d’identifier les limites d’un RAG documentaire seul, puis de construire un système plus fiable, explicable et reproductible, y compris pour des questions mixtes qui combinent statistiques et analyse.
 
 ---
 
@@ -43,84 +47,97 @@ L’objectif du projet est d’évaluer le comportement du LLM, d’identifier l
 
 Un RAG documentaire repose sur la récupération de passages textuels puis sur une génération LLM contrainte par ce contexte. Cette approche convient aux questions qualitatives, par exemple :
 
-> « Que disent les rapports sur Julius Randle ? »
+« Que disent les rapports sur Julius Randle ? »
 
 En revanche, elle est moins adaptée aux questions statistiques, par exemple :
 
-> « Quel est le pourcentage à 3 points de Nikola Jokić ? »
+« Quel est le pourcentage à 3 points de Nikola Jokić ? »
 
-Une valeur numérique présente dans un fichier Excel peut être mal extraite, mal associée au joueur ou absente des chunks récupérés. Demander au LLM de produire une réponse chiffrée à partir de texte extrait crée un risque d’erreur ou d’hallucination.
+Une valeur numérique présente dans un fichier Excel peut être mal extraite, mal associée au joueur ou absente des chunks récupérés. Demander au LLM de produire une réponse chiffrée à partir de texte extrait crée un risque d’erreur ou d’hallucination, notamment pour les pourcentages, comparaisons et classements.
 
-### 2.2 Résultats RAGAS disponibles
+### 2.2 Résultats RAGAS du prototype RAG seul
 
-Le jeu d’évaluation est stocké dans `data/eval_dataset.jsonl`. Le script `evaluate_ragas.py` produit un fichier détaillé `reports/ragas_results.csv` et une synthèse `reports/ragas_results.md`.
+Le jeu d’évaluation initial (dataset v1) est stocké dans `data/eval_dataset.jsonl`. Le script `evaluate_ragas.py` produit :
+
+- un fichier détaillé `reports/ragas_results.csv` ;
+- une synthèse `reports/ragas_results.md`.
 
 Les métriques suivies sont :
 
-- **Faithfulness** : mesure dans quelle mesure la réponse est soutenue par le contexte récupéré ;
-- **Response Relevancy** : mesure l’adéquation de la réponse à la question ;
-- **Context Precision** : évalue la pertinence des chunks récupérés ;
-- **Context Recall** : évalue la couverture du contexte de référence.
+- faithfulness : mesure dans quelle mesure la réponse est soutenue par le contexte récupéré ;
+- response_relevancy : mesure l’adéquation de la réponse à la question ;
+- context_precision : évalue la pertinence des chunks récupérés ;
+- context_recall : évalue la couverture du contexte de référence.
 
-L’évaluation du prototype a mis en évidence deux constats :
+L’évaluation du prototype a mis en évidence :
 
-1. les questions narratives peuvent être correctement traitées lorsque les PDF contiennent des passages explicites ;
-2. les questions chiffrées, les requêtes bruitées et les demandes de granularité non disponible ne doivent pas dépendre du RAG documentaire.
+- des questions narratives correctement traitées lorsque les PDF contiennent des passages explicites ;
+- des questions chiffrées et des demandes de granularité non disponible qui ne doivent pas dépendre du RAG documentaire seul.
 
-La mise en place du routeur SQL/RAG répond directement à cette limite.
+Ces constats motivent la mise en place d’un routeur SQL/RAG puis l’extension à la route MIXED.
 
 ---
 
-## 3. Architecture cible SQL/RAG
+## 3. Architecture cible SQL/RAG/MIXED
 
 ### 3.1 Principe de routage
 
 Le système final distingue la nature de la demande avant de générer une réponse.
 
-```text
+```
 Question utilisateur
         |
         v
-Routeur SQL / RAG
+MistralChat.py
         |
-        +-----------------------------+
-        |                             |
-        v                             v
-Question statistique             Question narrative
-        |                             |
-        v                             v
-SQL Tool sécurisé                RAG documentaire
-SQLite                            PDF → chunks → FAISS
-        |                             |
-        +-------------+---------------+
-                      |
-                      v
-     Réponse structurée ou abstention explicite
-                      |
-                      v
-            Interface Streamlit + Logfire
+        v
+answer(question)
+        |
+        v
+route_question(question)
+        |
+        +----------------------------+----------------------------+----------------------------+
+        |                            |                            |
+        v                            v                            v
+      "SQL"                        "RAG"                        "MIXED"
+        |                            |                            |
+        v                            v                            v
+answer_with_sql()             answer_with_rag()               answer_mixed()
+        |                            |                            |
+        v                            v                            v
+execute_sql()                 answer_question()         SQL + RAG + assemblage
+        |                            |                            |
+        v                            v                            v
+SQLite + validation     FAISS + chunks PDF + LLM   AssistantAnswer combinée
+        |                            |                            |
+        +---------------+------------+----------------------------+
+                        |
+                        v
+AssistantAnswer structuré (réponse, chunks cités, confiance, abstention)
+                        |
+                        v
+Affichage Streamlit + Logfire
 ```
 
-Le routeur est implémenté dans `utils/rag_pipeline_router.py`. Il classe les questions en deux routes :
+Exemples de règles de décision :
 
-| Route | Cas d’usage | Composants |
-|---|---|---|
-| SQL | Pourcentages, rebonds, comparaisons, agrégations, classements | `utils/sql_tool.py`, SQLite, `database/nba_analytics.db` |
-| RAG | Analyse tactique, avis, discussions et contexte de match | `utils/rag_pipeline.py`, `utils/vector_store.py`, FAISS |
+- questions purement chiffrées → route SQL ;
+- questions purement narratives → route RAG ;
+- questions combinant une demande chiffrée et une analyse narrative dans une même phrase → route MIXED.
 
 ### 3.2 Chaîne RAG documentaire
 
-Les documents textuels sont chargés depuis `inputs/`, découpés en chunks de 1 500 caractères avec un chevauchement de 150 caractères, puis convertis en embeddings Mistral. Les embeddings sont normalisés et stockés dans un index FAISS `IndexFlatIP` ; le score de recherche correspond donc à une similarité cosinus.
+Les documents textuels sont chargés depuis `inputs/`, découpés en chunks de 1 500 caractères avec un chevauchement de 150 caractères, puis convertis en embeddings Mistral. Les embeddings sont normalisés et stockés dans un index FAISS `IndexFlatIP` ; le score de recherche correspond à une similarité cosinus.
 
-Le pipeline RAG suit les étapes suivantes :
+Le pipeline RAG :
 
-1. génération de l’embedding de la question ;
-2. récupération des `top_k=5` chunks les plus similaires ;
-3. constitution d’un contexte comprenant les identifiants de chunks et les sources ;
-4. appel d’un agent Pydantic AI ;
-5. production d’une `AssistantAnswer` structurée : réponse, chunks cités, confiance et statut d’abstention.
+1. génère l’embedding de la question ;
+2. récupère les `top_k=5` chunks les plus similaires ;
+3. construit un contexte contenant texte et métadonnées ;
+4. appelle un agent Pydantic AI ;
+5. produit une réponse structurée avec statut d’abstention.
 
-Le prompt RAG impose que le modèle utilise exclusivement les informations présentes dans les chunks récupérés. Si le contexte est ambigu ou insuffisant, le système répond exactement qu’il ne peut pas répondre avec les sources disponibles.
+Le prompt impose que le modèle utilise exclusivement les informations présentes dans les chunks. Si le contexte est ambigu, hors sujet ou insuffisant, la réponse est une abstention documentaire.
 
 ### 3.3 Chaîne SQL déterministe
 
@@ -132,10 +149,10 @@ Le SQL Tool :
 - génère une requête SQLite ou la décision `ABSTAIN` ;
 - n’accepte qu’une requête `SELECT` unique ;
 - bloque les mots-clés de modification et d’administration ;
-- ajoute une limite de 20 lignes lorsque nécessaire ;
+- applique une limite de 20 lignes par défaut ;
 - fournit une réponse synthétisée uniquement à partir du résultat SQL.
 
-La granularité actuellement disponible est saisonnière. Les demandes sur les cinq derniers matchs, les matchs individuels, les dates ou le domicile/extérieur doivent conduire à une abstention explicite plutôt qu’à une valeur inventée.
+La granularité disponible est saisonnière. Les demandes sur cinq derniers matchs, quart‑temps, adversaires ou domicile/extérieur conduisent à une abstention structurée.
 
 ---
 
@@ -143,18 +160,14 @@ La granularité actuellement disponible est saisonnière. Les demandes sur les c
 
 ### 4.1 Séparation des données structurées et narratives
 
-Le diagnostic initial a montré que l’index FAISS contenait à la fois les PDF narratifs et le fichier Excel. Les recherches RAG pouvaient alors remonter des chunks contenant des valeurs `NaN`, des en-têtes de tableaux ou des définitions de métriques. Ces passages dégradaient la pertinence du contexte transmis au LLM.
+Le diagnostic initial a montré que l’index FAISS contenait à la fois les PDF narratifs et le fichier Excel. Les recherches RAG pouvaient remonter des chunks contenant des valeurs non textuelles ou des en‑têtes de tableaux, inutiles pour l’analyse documentaire.
 
-Exemple observé lors d’une question sur Nikola Jokić : la recherche récupérait des chunks Excel avec un score de similarité comparable aux chunks PDF, mais ces chunks étaient impossibles à utiliser pour une analyse narrative.
+La correction consiste à exclure les fichiers Excel (`.xlsx`) de l’index RAG et à les réserver au pipeline SQL. L’index FAISS est construit uniquement à partir des documents narratifs compatibles, principalement les PDF.
 
-La correction appliquée consiste à **exclure les fichiers structurés, notamment `.xlsx`, de l’index RAG**. Les documents Excel sont désormais réservés au pipeline SQL. L’index FAISS est construit uniquement à partir des documents narratifs compatibles, principalement les PDF.
+Résumé :
 
-Cette séparation suit le principe suivant :
-
-| Type de donnée | Stockage et traitement | Usage métier |
-|---|---|---|
-| PDF / texte narratif | Chunks, embeddings Mistral, FAISS, RAG | Analyse documentaire et qualitative |
-| Excel structuré | Validation Pydantic, SQLite, SQL Tool | Statistiques, comparaisons et agrégations |
+- PDF : chunks, embeddings, FAISS, RAG ;
+- Excel : validation Pydantic, SQLite, SQL Tool.
 
 ### 4.2 Traçabilité de la récupération
 
@@ -163,11 +176,11 @@ Le module `utils/vector_store.py` trace dans Logfire :
 - la question vectorisée ;
 - le nombre de résultats récupérés ;
 - les identifiants de chunks ;
-- les noms de fichiers sources ;
+- les fichiers sources ;
 - les scores de similarité ;
-- un extrait des passages récupérés.
+- des extraits textuels de diagnostic.
 
-L’interface Streamlit affiche, en cas d’abstention RAG, une section « Extraits récupérés pour diagnostic ». Ces extraits ne sont pas présentés comme des sources justifiant une réponse : ils expliquent pourquoi la réponse n’est pas suffisamment étayée.
+L’interface Streamlit affiche, en cas d’abstention RAG, une section « Extraits récupérés pour diagnostic » expliquant pourquoi aucune réponse fiable ne peut être donnée.
 
 ---
 
@@ -175,97 +188,150 @@ L’interface Streamlit affiche, en cas d’abstention RAG, une section « Extra
 
 ### 5.1 Validation des données et sorties structurées
 
-Les modèles Pydantic définissent des contrats pour les documents, chunks, requêtes, résultats SQL, cas d’évaluation et réponses finales. Cette validation réduit les erreurs silencieuses liées aux structures de données incomplètes ou incohérentes.
+Les modèles Pydantic définissent des contrats pour les documents, chunks, requêtes SQL, résultats SQL, cas d’évaluation et réponses finales.
 
-La réponse finale est modélisée par `AssistantAnswer` :
+La réponse finale est modélisée par un objet `AssistantAnswer` :
 
-```text
-answer            Texte retourné à l’utilisateur
-cited_chunk_ids   Identifiants des chunks réellement utilisés
-confidence        high, medium ou low
-abstained         true si le système ne peut pas répondre fiablement
-```
+- texte retourné à l’utilisateur ;
+- identifiants des chunks utilisés ;
+- niveau de confiance (`high`, `medium`, `low`) ;
+- indicateur d’abstention (`True` ou `False`).
 
 ### 5.2 Abstention contrôlée
 
-L’abstention est une fonctionnalité centrale du système :
+L’abstention est une fonctionnalité centrale :
 
-- la route SQL s’abstient lorsque la granularité demandée n’existe pas dans les données structurées ;
-- la route RAG s’abstient lorsque les chunks récupérés ne contiennent pas de preuve explicite ;
-- l’application n’invente pas de chiffres ni d’analyse documentaire non sourcée.
+- la route SQL s’abstient lorsque la granularité demandée n’existe pas ;
+- la route RAG s’abstient lorsque les chunks ne contiennent pas de preuve explicite ;
+- la route MIXED s’abstient globalement lorsque les deux branches (SQL et RAG) échouent simultanément ;
+- aucune valeur chiffrée ni analyse narrative n’est inventée.
 
 ### 5.3 Observabilité avec Logfire
 
-Logfire est utilisé pour tracer les principales étapes :
+Logfire trace :
 
-- classification SQL/RAG ;
-- exécution de la branche SQL ou RAG ;
-- génération des embeddings ;
-- recherche vectorielle ;
-- nombre de chunks récupérés ;
-- consommation de tokens ;
-- réponse affichée et statut d’abstention.
+- le routage (SQL, RAG, MIXED) ;
+- l’exécution de chaque branche ;
+- la génération des embeddings ;
+- la recherche vectorielle FAISS ;
+- les scores de similarité ;
+- la consommation de tokens ;
+- les réponses finales et les statuts d’abstention.
 
-Cette instrumentation a permis d’identifier puis de corriger le mélange entre Excel et PDF dans l’index vectoriel.
+Cette instrumentation a permis d’identifier le mélange Excel/PDF dans l’index vectoriel et certains comportements de la route MIXED à améliorer.
 
 ---
 
-## 6. Validation et résultats
+## 6. Validation et résultats (dataset v2, avec MIXED)
 
 ### 6.1 Tests automatisés
 
-La suite de tests a été exécutée avec succès :
+La suite de tests Pytest couvre :
 
-```text
-15 passed
-```
+- les schémas Pydantic ;
+- l’ingestion des données ;
+- la sécurité et l’exécution du SQL Tool ;
+- le routage SQL/RAG/MIXED.
 
-Les tests couvrent notamment :
+Les tests se terminent avec succès. Un avertissement de dépréciation FAISS/NumPy peut apparaître sans bloquer l’exécution.
 
-| Fichier de test | Objet couvert |
-|---|---|
-| `tests/test_schemas.py` | Validation des schémas Pydantic |
-| `tests/test_ingestion.py` | Ingestion et validation des données |
-| `tests/test_sql_tool.py` | Sécurité et exécution du SQL Tool |
-| `tests/test_router.py` | Routage SQL/RAG, abstention SQL et repli contrôlé |
+### 6.2 Protocole d’évaluation final
 
-Un avertissement de dépréciation provenant de FAISS et NumPy peut apparaître dans l’environnement de développement. Il provient d’une dépendance externe et ne bloque pas les tests ni l’exécution de l’application.
+L’évaluation finale (dataset v2) porte sur 46 questions réparties en sept catégories :
 
-### 6.2 Scénarios fonctionnels validés
+- simple ;
+- complexe ;
+- bruitée ;
+- textuelle ;
+- non répondable ;
+- hors périmètre ;
+- mixed.
 
-| Scénario | Question | Route observée | Résultat |
-|---|---|---|---|
-| Statistique saisonnière | « Quel est le pourcentage à 3 points de Nikola Jokic ? » | SQL | Réponse : 41,7 % |
-| Analyse documentaire positive | « Que disent les rapports sur Julius Randle ? » | RAG | Synthèse narrative avec sources `0_1` et `0_0` |
-| Granularité indisponible | « Quel est le meilleur pourcentage à 3 points sur les cinq derniers matchs ? » | SQL | Abstention : données saisonnières uniquement |
-| Information documentaire insuffisante | « Que disent les rapports sur Nikola Jokic ? » | RAG | Abstention justifiée et extraits de diagnostic affichés |
+Les métriques suivies sont :
 
-Le cas Julius Randle démontre que le RAG peut produire une synthèse fidèle lorsque le corpus contient une information explicite. La réponse indique notamment son impact physique, son efficacité offensive, sa lecture des prises à deux et son implication défensive, en citant les chunks utilisés.
+- faithfulness ;
+- answer_relevancy ;
+- routage correct ;
+- abstention correcte.
 
-Le cas Nikola Jokić démontre le comportement de sûreté : les passages récupérés ne parlaient pas d’une analyse de son jeu, mais notamment de supporters ou de sujets hors périmètre. Le système s’est donc abstenu au lieu de générer une analyse infondée.
+### 6.3 Routage et abstention
+
+Par route :
+
+| Route  | Nombre de questions | Taux d’abstention correcte |
+|---|---:|---:|
+| SQL   | 32 | 1,00 |
+| RAG   | 10 | 0,80 |
+| MIXED |  4 | 0,50 |
+
+Par catégorie :
+
+| Catégorie       | Nombre de questions | Abstentions attendues | Abstentions observées | Taux d’abstention correcte |
+|:---------------|--------------------:|-----------------------:|-----------------------:|---------------------------:|
+| bruitée        | 7                  | 0                     | 0                     | 1,00                      |
+| complexe       | 9                  | 0                     | 0                     | 1,00                      |
+| hors périmètre | 4                  | 4                     | 4                     | 1,00                      |
+| non répondable | 6                  | 6                     | 6                     | 1,00                      |
+| simple         | 8                  | 0                     | 0                     | 1,00                      |
+| textuelle      | 8                  | 0                     | 2                     | 0,75                      |
+| mixed          | 4                  | 0                     | 2                     | 0,50                      |
+
+La route SQL obtient un taux d’abstention correcte de 100 %. La route RAG atteint 80 % d’abstention correcte, ce qui reste satisfaisant mais montre une légère marge de progression. La route MIXED atteint 50 % d’abstention correcte : la fonctionnalité est en place, mais l’orchestrateur doit mieux gérer les cas où une réponse partielle est acceptable.
+
+### 6.4 Métriques de qualité
+
+Par couple catégorie / route :
+
+| Catégorie et route        | Faithfulness | Answer relevancy | Abstention correcte |
+|:--------------------------|------------:|-----------------:|-------------------:|
+| Bruitée — SQL            | 1,000       | 0,782            | 1,00              |
+| Complexe — SQL           | 1,000       | 0,765            | 1,00              |
+| Hors périmètre — RAG     | 0,000       | 0,000            | 1,00              |
+| Hors périmètre — SQL     | 1,000       | 0,000            | 1,00              |
+| Non répondable — SQL     | 1,000       | 0,000            | 1,00              |
+| Simple — SQL             | 1,000       | 0,972            | 1,00              |
+| Textuelle — RAG          | 0,720       | 0,670            | 0,75              |
+| Mixed — MIXED            | 1,000       | 0,211            | 0,50              |
+
+Interprétation :
+
+- Les questions simples et complexes routées vers SQL conservent une fidélité parfaite et une forte pertinence, ce qui confirme le choix d’un pipeline SQL déterministe pour les statistiques structurées.
+- La branche RAG textuelle reste adaptée, avec une légère baisse de pertinence par rapport à la version précédente, due principalement aux limites du corpus PDF.
+- La branche MIXED présente une fidélité parfaite mais une pertinence globale faible : certaines questions hybrides sont partiellement traitées, d’autres conduisent à une abstention totale alors qu’une réponse partielle serait acceptable.
+
+### 6.5 Scénarios fonctionnels
+
+Exemples :
+
+- question simple SQL : « Quel est le pourcentage à 3 points de Nikola Jokić ? » → réponse 41,7 % ;
+- question textuelle RAG : « Que disent les rapports sur Julius Randle ? » → synthèse narrative basée sur plusieurs passages ;
+- question non répondable SQL : « Quel est le meilleur 3P% sur les cinq derniers matchs ? » → abstention structurée ;
+- question MIXED avec succès partiel : « Quel est le pourcentage à 3 points de Nikola Jokić et que disent les rapports sur lui ? » → partie SQL correcte, partie RAG en abstention ;
+- question MIXED avec abstention globale : « Compare les rebonds de Julius Randle et Nikola Jokić, puis explique ce que les rapports disent du jeu de Julius Randle. » → abstention globale si les sources ne couvrent pas correctement les deux volets.
 
 ---
 
 ## 7. Limites identifiées
 
-Le système final reste soumis aux limites suivantes :
+Les principales limites sont :
 
-- le corpus PDF est limité et composé de discussions Reddit parfois bruitées ;
-- toutes les équipes et tous les joueurs ne sont pas documentés de manière homogène ;
-- les statistiques Excel sont agrégées à la saison ; elles ne permettent pas encore l’analyse match par match ou domicile/extérieur ;
-- le routeur étant basé sur un LLM, une question hybride ou ambiguë peut être mal classifiée ;
-- RAGAS dépend de la disponibilité de références et de contextes adaptés ; certaines métriques peuvent être indisponibles selon les cas d’évaluation.
+- corpus PDF limité et composé de discussions Reddit parfois bruitées ;
+- couverture inégale des joueurs et équipes ;
+- statistiques Excel agrégées à la saison (pas d’analyse match par match, domicile/extérieur, quart‑temps) ;
+- routeur LLM susceptible de mal router certaines questions hybrides ou ambiguës ;
+- route MIXED qui ne gère pas encore de façon optimale toutes les combinaisons de réponses partielles ;
+- métriques RAGAS dépendantes des références et contextes disponibles.
 
 ---
 
 ## 8. Recommandations d’évolution
 
-1. Ajouter des rapports de match éditorialisés, structurés et fiables afin d’améliorer la couverture narrative.
+1. Enrichir le corpus PDF avec des rapports de match éditorialisés et structurés.
 2. Ajouter un export statistique match par match avec dates, adversaires et indicateurs domicile/extérieur.
-3. Mettre en place un reranker après FAISS afin de renforcer la précision des passages transmis au LLM.
-4. Étendre le jeu d’évaluation avec des cas spécifiques de routage, des questions mixtes et des formulations bruitées.
-5. Suivre dans Logfire les scores de similarité et taux d’abstention pour détecter les régressions après chaque évolution du corpus.
-6. Ajouter un test automatisé garantissant que les fichiers Excel ne sont jamais inclus dans le corpus RAG.
+3. Mettre en place un reranker après FAISS pour améliorer la pertinence des chunks transmis au LLM.
+4. Améliorer l’orchestrateur MIXED en décomposant explicitement chaque question hybride en sous‑questions SQL et RAG, puis en acceptant des réponses partielles.
+5. Étendre le jeu d’évaluation avec davantage de cas MIXED et de formulations bruitées.
+6. Suivre dans Logfire des métriques spécifiques à la route MIXED (scores de similarité, taux d’abstentions partielles et totales).
 
 ---
 
@@ -273,7 +339,7 @@ Le système final reste soumis aux limites suivantes :
 
 Les principaux fichiers nécessaires à la reproduction sont :
 
-```text
+```
 requirements.txt
 pyproject.toml
 README.md
@@ -282,6 +348,7 @@ load_excel_to_db.py
 evaluate_ragas.py
 MistralChat.py
 data/eval_dataset.jsonl
+data/eval_dataset_v2.jsonl
 tests/
 utils/
 db/
@@ -301,12 +368,16 @@ python -m pytest -q
 streamlit run MistralChat.py
 ```
 
-Le fichier `.env` est volontairement exclu du contrôle de version. Il ne doit jamais être inclus dans une archive de livraison.
+Le fichier `.env` est exclu du contrôle de version et ne doit pas être inclus dans une archive de livraison.
 
 ---
 
 ## Conclusion
 
-L’évaluation du prototype a montré les limites d’un RAG documentaire seul pour répondre aux questions chiffrées. Le système final SQL/RAG sépare les responsabilités : les statistiques structurées sont traitées de façon déterministe par SQL, tandis que les documents non structurés sont analysés par un pipeline RAG traçable.
+L’évaluation du prototype a montré les limites d’un RAG documentaire seul pour répondre aux questions chiffrées. Le système final SQL/RAG/MIXED sépare les responsabilités :
 
-Cette architecture améliore la fiabilité opérationnelle de l’assistant : elle fournit des réponses chiffrées exactes lorsque les données existent, produit des synthèses narratives sourcées lorsque les documents sont pertinents, et s’abstient explicitement lorsque les sources ne permettent pas de répondre de manière fondée.
+- statistiques structurées traitées de façon déterministe par SQL ;
+- documents non structurés analysés par un pipeline RAG traçable ;
+- questions mixtes prises en charge par une route MIXED qui combine les deux voies.
+
+Cette architecture améliore la fiabilité opérationnelle : elle fournit des réponses chiffrées exactes lorsque les données existent, des synthèses narratives sourcées lorsque les documents sont pertinents, et des abstentions explicites lorsque les sources ne permettent pas de répondre de manière fondée. La route MIXED ouvre la voie à des interactions plus riches entre statistiques et analyse, tout en offrant un cadre clair pour les améliorations futures.
